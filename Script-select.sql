@@ -422,4 +422,300 @@ FROM users AS u
 JOIN user_settings AS us ON us.user_id = u.id
 WHERE id = 1;
 
+#Соединения Union							
 
+# Использование UNION [DISTINCT] - FULL OUTER JOIN
+SELECT *
+FROM users
+LEFT JOIN private_messages ON users.id = private_messages.sender_id
+	UNION DISTINCT
+SELECT *
+FROM users
+RIGHT JOIN private_messages ON users.id = private_messages.sender_id
+
+# Использование UNION ALL - самые активные в сообщениях пользователи
+SELECT 
+	count(*) AS cnt,
+	sender_id
+FROM (
+	SELECT sender_id 
+	FROM channel_messages 
+		UNION ALL 
+	SELECT sender_id 
+	FROM group_messages  
+) AS s
+GROUP BY sender_id
+ORDER BY cnt DESC 
+
+																		#Оконные функции			
+
+# подсчет популярности яыков (с группировкой и агрегирующей функцией)
+SELECT 
+	COUNT(*) AS cnt,
+	app_language 
+FROM user_settings
+GROUP BY app_language;
+
+# то же (с оконной функцией)
+SELECT DISTINCT 
+	COUNT(*) OVER (PARTITION BY app_language) AS cnt,
+	app_language 
+FROM user_settings;
+
+# оконные функции позволяют выводить любые другие поля таблицы
+SELECT DISTINCT 
+	COUNT(*) OVER (PARTITION BY app_language) AS cnt,
+	app_language,
+	color_scheme 
+FROM user_settings;
+
+# в рамках одного запроса можно использовать несколько оконных функций
+SELECT DISTINCT 
+	ROW_NUMBER() OVER() AS rn,
+	RANK() OVER(ORDER BY app_language) AS language_rank,
+	DENSE_RANK() OVER(ORDER BY app_language) AS language_rank2,
+	ROW_NUMBER() OVER(PARTITION BY app_language) AS rn2,
+	COUNT(*) OVER (PARTITION BY app_language) AS cnt1,
+	COUNT(*) OVER (PARTITION BY color_scheme) AS cnt2,
+	app_language,
+	color_scheme 
+FROM user_settings
+ORDER BY app_language, rn2;
+
+# альтернативный синтаксис (именованные оконные функции)
+SELECT DISTINCT 
+	COUNT(*) OVER win1 AS cnt,
+	app_language 
+FROM user_settings
+WINDOW win1 AS (PARTITION BY app_language);
+
+# использование одного 'окна' вместе с разными фунциями
+SELECT
+  app_language,
+  ROW_NUMBER() OVER w AS 'row_number',
+  RANK()       OVER w AS 'rank',
+  DENSE_RANK() OVER w AS 'dense_rank'
+FROM user_settings
+WINDOW w AS (ORDER BY app_language);
+
+																	#Общие табличные выражения				
+
+# пример из прошлых уроков (получение данных о пользователе из разных таблиц с помощью вложенных запросоов)
+SELECT 
+	firstname ,
+	lastname ,
+	(SELECT app_language FROM user_settings WHERE user_id = users.id) AS 'app_language',
+	(SELECT is_premium_account FROM user_settings WHERE user_id = users.id) AS 'is_premium_account'
+FROM users
+WHERE id = 2;
+
+# тот же результат, но с помощью CTE (общего табличного выражения)
+WITH cte1 AS (
+	SELECT 
+		user_id,
+		app_language ,
+		is_premium_account
+	FROM user_settings
+)
+SELECT 
+	firstname ,
+	lastname , 
+	app_language ,
+	is_premium_account	
+FROM cte1
+JOIN users AS u ON u.id = cte1.user_id
+WHERE id = 2
+;
+
+# в 1 запросе можно использовать несколько табличных выражений (у каждого из них должно быть свое уникальное имя)
+WITH cte1 AS (
+	SELECT * FROM channel_subscribers 
+),
+cte2 AS (
+	SELECT * FROM group_members  
+)
+SELECT * FROM cte2
+# ....;
+
+																
+																	# Рекурсивные табличные выражения
+# вывод иерархии сообщений (кто-кому отвечал)
+WITH RECURSIVE message_replies(id, body, history) AS (
+	SELECT id, body, cast(id AS CHAR(100))
+	FROM group_messages 
+	WHERE reply_to_id IS NULL 
+		UNION ALL 
+	SELECT gm.id, gm.body, CONCAT(mr.history, ' <-- ', gm.id)
+	FROM message_replies AS mr
+	JOIN group_messages AS gm ON mr.id = gm.reply_to_id
+)
+SELECT * FROM message_replies ORDER BY history
+
+
+
+SELECT 
+	firstname,
+	lastname
+FROM users
+WHERE id in (SELECT user_id FROM user_settings WHERE app_language = 'russian')
+ORDER BY lastname;
+
+
+select
+    id,
+    views_count,
+    created_at,
+    (select firstname from users where id = 2) as name,
+    (select lastname from users where id = 2) as lastname,
+    (select count(user_id) from stories_likes where user_id = 2) as count
+from stories
+where user_id = 2
+order by views_count desc;
+
+
+SELECT
+    u.firstname,
+    u.lastname,
+    email
+FROM users u
+LEFT OUTER JOIN channel_subscribers cs ON u.id = cs.user_id
+WHERE cs.user_id IS NULL;
+ 
+SELECT DISTINCT 
+	user_id,
+	COUNT(*) OVER (PARTITION BY channel_id) AS cnt
+FROM channel_subscribers
+LIMIT 1;
+
+
+																#Полнотекстовый поиск
+
+# обычный фильтр с оператором WHERE-LIKE
+SELECT *
+FROM saved_messages 
+WHERE body LIKE '%ratione%' OR body LIKE '%est%';
+
+# создание полнотекстового индекса на поле body
+CREATE FULLTEXT INDEX full_body_idx ON saved_messages(body);
+
+# полнотекстовый поиск в режиме BOOLEAN
+# + обязательное слово
+# - исключаемое слово
+SELECT *
+FROM saved_messages 
+WHERE match(body) AGAINST('+ratione +est -voluptatem' IN BOOLEAN MODE);
+
+# полнотекстовый поиск в режиме BOOLEAN
+# * заменитель любого окончания слова
+SELECT *
+FROM saved_messages 
+WHERE MATCH(body) AGAINST('+ratione +est +vol*' IN BOOLEAN MODE);
+
+
+
+																			#Представление (VIEW)
+# удалить представление с проверкой
+DROP VIEW IF EXISTS v_users_messages;
+
+# создать представление
+CREATE VIEW v_users_messages AS 
+	SELECT 
+		users.id AS uid, firstname, lastname,
+		private_messages.id AS pmid, sender_id, body, created_at
+	FROM users
+	LEFT OUTER JOIN private_messages ON users.id = private_messages.sender_id
+	ORDER BY private_messages.id
+	LIMIT 12;
+	
+# создать или изменить представление
+CREATE OR REPLACE VIEW v_users_messages AS 
+	SELECT 
+		users.id AS uid, firstname, lastname,
+		private_messages.id AS pmid, sender_id, body, created_at
+	FROM users
+	LEFT OUTER JOIN private_messages ON users.id = private_messages.sender_id
+	ORDER BY private_messages.id
+	LIMIT 12;
+	
+# вывод данных через представление	
+SELECT * 
+FROM v_users_messages
+WHERE uid =5 ;	
+
+
+																		#Процедуры
+
+# удаление процедуры с проверкой
+DROP PROCEDURE IF EXISTS my_procedure;
+
+# установка нового разделителя команд
+DELIMITER //
+
+# создание самой процедуры
+CREATE PROCEDURE my_procedure()
+BEGIN
+    SELECT 456;
+    SELECT 456;
+    SELECT 456;
+END//
+
+# возвращение стандартного разделителя команд
+DELIMITER ;    
+    
+# вызов процедуры    
+CALL my_procedure();
+
+##########################################################################
+
+# процедура, возвращающая указанное число случайных групп или каналов
+DROP PROCEDURE IF EXISTS telegram.random_society;
+
+DELIMITER $$
+$$
+CREATE PROCEDURE telegram.random_society(cnt int)
+BEGIN
+    SELECT id, title , invite_link , 'channel' AS community_type
+    FROM channels 
+        UNION 
+    SELECT id, title , invite_link , 'group' AS community_type
+    FROM `groups`  
+    ORDER BY rand()
+    LIMIT cnt;
+END $$
+DELIMITER ;
+
+
+# вызов процедуры
+CALL random_society(3);
+
+
+
+
+																	#Вызовы функции
+# создаем функцию
+CREATE FUNCTION `telegram`.`get_premium_percentage`() 
+RETURNS float
+    READS SQL DATA
+BEGIN
+    DECLARE premium_users_count INT;
+    DECLARE total_users_count INT;
+    DECLARE _result FLOAT;    
+   
+    SET premium_users_count = (
+        SELECT count(*)
+        FROM user_settings
+        WHERE is_premium_account = TRUE 
+    );
+   
+    SET total_users_count = (
+        SELECT count(*)
+        FROM user_settings
+    );
+    
+    SET _result = premium_users_count / total_users_count;
+    
+    RETURN _result;
+END
+
+# вызываем функцию
+SELECT telegram.get_premium_percentage();
