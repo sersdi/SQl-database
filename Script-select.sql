@@ -1224,3 +1224,36 @@ FROM stories s
 # JOIN stories_likes sl ON s.id = sl.story_id 
 WHERE s.user_id IN (1,2,3)
 # GROUP BY s.id;
+
+
+																	#Настройки сервера
+
+# включаем логирование медленных запросов
+SET GLOBAL slow_query_log = 'ON';
+
+# определяем расположение лога для медленных запросов
+SET GLOBAL slow_query_log_file = 'c:\\mysql-slow-query.log';
+
+# устанавливаем критерий для медленных запросов (время исполнения в секундах)
+SET GLOBAL long_query_time = 1;
+
+# включаем логирование для запросов, не использующих индексы
+SET GLOBAL log_queries_not_using_indexes = 'ON';
+
+# выводим наши переменные
+SHOW GLOBAL variables LIKE '%slow%';
+SHOW GLOBAL variables LIKE '%long%';
+
+# пример запроса, не использующего индекс
+SELECT *
+FROM channels 
+WHERE title = 'some channel title...';
+
+# пример запроса, использующего индекс
+SELECT *
+FROM channels 
+WHERE id = 1;
+
+# добавление индекса на поле title
+ALTER TABLE channels ADD INDEX (title);
+
