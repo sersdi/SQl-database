@@ -719,3 +719,508 @@ END
 
 # вызываем функцию
 SELECT telegram.get_premium_percentage();
+
+
+# Переменные
+# задаем локальную переменную
+SET @users_count = 10;     
+# читаем значение переменной
+SELECT @users_count;
+
+# выводим список глобальных переменных
+SHOW GLOBAL VARIABLES;
+
+# выводим только переменную foreign_key_checks (отвечает за проверку внешних ключей)
+SHOW VARIABLES LIKE 'foreign_key_checks';
+
+# выводим глобальное значение системной переменной
+SHOW GLOBAL VARIABLES LIKE 'foreign_key_checks';
+
+# выводим локальное значение системной переменной
+SHOW SESSION VARIABLES LIKE 'foreign_key_checks';
+
+# выключаем локально проверку внешних ключей
+SET @@foreign_key_checks = 0;
+SET foreign_key_checks = 0;
+
+# выключаем глобально проверку внешних ключей
+SET GLOBAL foreign_key_checks = 0;
+
+# присвоение значений переменным в SELECT запросе
+SELECT 
+	@id := id,
+	@firstname := firstname
+FROM users
+WHERE id = 1;
+
+# чтение переменных
+SELECT @id, @firstname;
+
+# второй вариант присвоения значений переменным в SELECT запросе
+SELECT id, firstname
+INTO @id, @firstname
+FROM users
+WHERE id = 11;
+
+# объявление переменных вне процедур\функций
+SET @user_id = 5;
+SET @channel_id = 5;
+
+# является ли пользователь владельцем канала
+SELECT @user_id = (
+    SELECT owner_user_id
+    FROM channels
+    WHERE id = @channel_id
+) AS 'is_owner';
+
+																	# создание параметризованной функции
+
+# функция определяет отношение пользователя к каналу (владелец, подписчик, посторонний)
+CREATE FUNCTION `telegram`.`get_user_to_channel_relation`(
+    _user_id BIGINT UNSIGNED, _channel_id  BIGINT UNSIGNED
+) RETURNS varchar(15) CHARSET utf8mb4
+    READS SQL DATA
+BEGIN
+    DECLARE owner_id BIGINT UNSIGNED;
+    DECLARE subscriber_id BIGINT UNSIGNED;
+
+    SELECT owner_user_id
+    INTO owner_id
+    FROM channels
+    WHERE id = _channel_id;
+
+    IF _user_id = owner_id THEN 
+        RETURN 'owner';
+    END IF;
+
+    SELECT user_id
+    INTO subscriber_id
+    FROM channel_subscribers
+    WHERE channel_id = _channel_id AND user_id = _user_id;
+
+    IF subscriber_id THEN 
+        RETURN 'subscriber';
+    END IF;    
+
+    RETURN 'outsider';
+END
+
+# вызов функции с параметрами
+SELECT get_user_to_channel_relation(1, 11);
+
+
+
+															# создание триггера на событие обновления (BEFORE UPDATE)
+
+DROP TRIGGER IF EXISTS telegram.check_user_age_before_update;
+USE telegram;
+
+DELIMITER $$
+$$
+CREATE DEFINER=`root`@`localhost` TRIGGER `check_user_age_before_update` 
+BEFORE UPDATE ON `users` 
+FOR EACH ROW 
+BEGIN 
+    DECLARE message varchar(100);
+
+    IF NEW.birthday > CURRENT_DATE() THEN 
+        SET message = CONCAT('Update has been cancelled.',
+            'New value: ', NEW.birthday, ' is incorrect.'
+            'Old value: ', OLD.birthday, ' retained.'
+        );
+
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = message;
+    END IF;    
+END $$
+DELIMITER ;
+
+
+# создание триггера на событие вставки(BEFORE INSERT)
+
+DROP TRIGGER IF EXISTS telegram.check_user_age_before_insert;
+USE telegram;
+
+DELIMITER $$
+$$
+CREATE DEFINER=`root`@`localhost` TRIGGER `check_user_age_before_insert` BEFORE INSERT ON `users` FOR EACH ROW BEGIN 
+    IF NEW.birthday > CURRENT_DATE() THEN
+        SET NEW.birthday = CURRENT_DATE();
+    END IF;    
+END $$
+DELIMITER ;
+
+
+# вставка некорректных данных (дата рождения)
+INSERT INTO users 
+SET 
+    firstname = 'Nick',
+    lastname = 'Durov',
+    birthday = '2040.10.10'
+;
+
+# обновление на некорректные данные (дата рождения)
+UPDATE users 
+SET birthday = '2040.10.10'
+WHERE id = 10;
+
+
+
+															# вызов транзакции
+CALL add_user('Solar2', 'Reickal2', 'ser.234@exaple.ru', '2002-06-05', FALSE, 'english', @trans_result);
+SELECT @trans_result;
+
+# удаляем процедуру с проверкой
+DROP PROCEDURE IF EXISTS telegram.add_user;
+
+# устанавливаем разделитель команд
+DELIMITER $$
+
+# создаем процедуру
+CREATE PROCEDURE telegram.add_user(
+    _firstname VARCHAR(100), 
+    _lastname VARCHAR(100), 
+    _email VARCHAR(100), 
+    _birthday DATE,
+    _is_premium_account BIT, 
+    _app_language ENUM('english','french','russian','german','belorussian','croatian','dutch'), 
+    
+    OUT trans_result VARCHAR(200)
+)
+BEGIN
+# объявляем необходимые переменные
+    DECLARE has_error BIT DEFAULT 0;
+    DECLARE code VARCHAR(100);
+    DECLARE error_string VARCHAR(100);
+
+# объявляем обработчик исключений
+    DECLARE CONTINUE HANDLER FOR SQLEXCEPTION
+    BEGIN
+        SET has_error = 1;
+    
+        GET stacked DIAGNOSTICS CONDITION 1
+            code = RETURNED_SQLSTATE, error_string = MESSAGE_TEXT;
+         
+        SET trans_result = CONCAT('Error occured! Code: ', code, '. Text: ', error_string);
+    END;
+
+# начинаем транзакцию    
+    START TRANSACTION;    
+        INSERT INTO `users` (firstname, lastname, email, birthday)
+        VALUES (_firstname, _lastname, _email, _birthday);
+
+        INSERT INTO `user_settings` (user_id, is_premium_account, app_language, created_at)
+        VALUES (LAST_INSERT_ID(), _is_premium_account, _app_language, NOW());
+    
+# проверяем ошибки
+    IF has_error THEN
+        # SET trans_result = 'Error!';
+        ROLLBACK;
+    ELSE 
+        SET trans_result = 'Ok.';
+        COMMIT;
+    END IF;
+END$$
+
+# возвращаем разделитель в значение по умолчанию
+DELIMITER ;
+
+
+# вызываем процедуру с параметрами
+CALL add_user('Leslie3', 'Reichel3',  'cronin.emmitt3@example.net', '1982-05-01', FALSE, 'english', @trans_result);
+
+# читаем результат выполнения процедуры
+SELECT @trans_result;
+
+# проверяем данные в таблицах
+SELECT * FROM users ORDER BY id DESC;
+SELECT * FROM user_settings ORDER BY user_id DESC;
+
+
+
+																					#Уровни изоляций транзакций 
+
+# вывести нужную переменную
+SHOW VARIABLES LIKE '%isolation%';
+
+# установить глобальный уровень изоляции транзакций в значение READ UNCOMMITTED
+SET global TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+
+# установить глобальный уровень изоляции транзакций в значение READ COMMITTED
+SET global TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
+# установить глобальный уровень изоляции транзакций в значение REPEATABLE READ
+SET global TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+
+# установить глобальный уровень изоляции транзакций в значение SERIALIZABLE
+SET global TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+
+# зайти на локальный сервер MySQL
+mysql - u root -p
+
+# выйти из сервера (закончить текущую сессию)
+exit
+
+# переключиться на БД telegram
+use telegram;
+
+# начать транзакцию
+start transaction;
+begin;
+
+# зафиксировать изменения и закончить транзакцию
+commit;
+
+# отменить изменения и закончить транзакцию
+rollback;
+
+
+
+																			#Блокировка таблиц
+# вывести идентификатор текущего подключения
+SELECT CONNECTION_ID();
+
+# вывести список активных подключений к серверу
+SHOW PROCESSLIST;
+
+# заблокировать таблицу stories на чтение
+LOCK TABLE stories READ;
+
+# заблокировать таблицу stories на запись
+LOCK TABLE stories WRITE;
+
+# разблокировать все таблицы
+UNLOCK TABLES;
+
+
+																		#Взаимная блокировка
+# включить логирование дополнительной информации о блокировках
+SET GLOBAL innodb_print_all_deadlocks = ON;
+
+# проверить значение глобальной переменной
+SHOW VARIABLES LIKE 'innodb_print_all_deadlocks';
+
+# вывести информацию о текущих блокировках
+SELECT * FROM performance_schema.data_locks
+
+# вывести информацию о текущих ожидающих командах
+SELECT * FROM performance_schema.data_lock_waits;
+
+# вывести количество взаимных блокировок со времени старта сервера
+SELECT `count` 
+FROM INFORMATION_SCHEMA.INNODB_METRICS
+WHERE NAME="lock_deadlocks";
+
+# посмотреть имя/путь файла с логами ошибок
+SELECT @@log_error;
+
+
+
+
+
+																						#Права доступа
+# вывести инфо о текущем пользователе
+SELECT CURRENT_USER();
+SELECT user();
+
+# вывести список всех пользователей на сервере (с информацией о правах доступа)
+SELECT * FROM mysql.user;
+
+# вывести права доступа текущего пользователя
+SHOW grants;
+
+# вывести права доступа указанного пользователя
+SHOW grants FOR 'root'@'localhost';
+
+# создать пользователя и указать ему пароль
+CREATE USER 'john_admin'@'localhost' IDENTIFIED BY '12345';
+CREATE USER 'max_tester'@'localhost' IDENTIFIED BY '12345';
+
+# раздать пользователю максимальные права на всем сервере
+GRANT ALL PRIVILEGES ON *.* TO 'john_admin'@'localhost';
+# проверить права
+SHOW grants FOR 'john_admin'@'localhost';
+
+# создать пользователя без указания пароля
+CREATE USER 'alex_dev'@'localhost';
+
+# задать пароль пользователю
+SET PASSWORD FOR 'alex_dev'@'localhost' = '12345';
+
+# задать пользователю максимальные права на указанную БД
+GRANT ALL PRIVILEGES ON telegram.* TO 'alex_dev'@'localhost';
+# проверить результат
+SHOW grants FOR 'alex_dev'@'localhost';
+
+# задать пользователю указанный набор прав (DDL + DML) на указанной БД
+GRANT CREATE, ALTER, DROP, SELECT, UPDATE, INSERT, DELETE 
+ON telegram.* 
+TO 'max_tester'@'localhost';
+# проверить
+SHOW grants FOR 'max_tester'@'localhost';
+
+# забрать права на указанные команды у пользователя
+REVOKE CREATE, ALTER, DROP 
+ON telegram.* 
+FROM 'max_tester'@'localhost';
+# проверить
+SHOW grants FOR 'max_tester'@'localhost';
+
+# создать пользователя с необходимостью менять пароль раз в 180 дней и прочими ограничениями
+CREATE USER 'paul_manager'@'localhost' 
+PASSWORD EXPIRE INTERVAL 180 DAY
+FAILED_LOGIN_ATTEMPTS 3 
+PASSWORD_LOCK_TIME 2;
+
+# сменить/задать пароль пользователю
+SET PASSWORD FOR 'paul_manager'@'localhost' = '12345';
+
+# задать права доступа только на чтение для указанного пользователя
+GRANT SELECT ON telegram.* TO 'paul_manager'@'localhost';
+
+# забрать все права у пользователя на указанную БД
+REVOKE ALL PRIVILEGES ON telegram.* FROM 'paul_manager'@'localhost';
+
+# выдать права только на чтение и только на указанные поля
+GRANT SELECT(firstname, lastname) ON telegram.users TO 'paul_manager'@'localhost';
+
+# удалить пользователя
+DROP USER 'paul_manager'@'localhost';
+
+# выдать указанные права пользователю
+GRANT DELETE ON world.* TO 'alex_dev'@'localhost';
+GRANT SELECT ON world.* TO 'alex_dev'@'localhost';
+GRANT UPDATE ON world.* TO 'alex_dev'@'localhost';
+GRANT INSERT ON world.* TO 'alex_dev'@'localhost';
+
+
+
+																				#Роли
+# создать роли
+CREATE ROLE '_admin';
+CREATE ROLE '_developer', '_tester', '_manager';
+
+# посмотреть определение таблицы user в БД mysql
+SHOW COLUMNS FROM mysql.user;
+# вывести содержимое указанной таблицы
+SELECT * FROM mysql.user;
+
+# раздать права ролям (по аналогии с пользователями в прошлом уроке)
+GRANT ALL privileges ON *.* TO '_admin';
+GRANT ALL privileges ON telegram.* TO '_developer';
+GRANT CREATE, ALTER, DROP, SELECT, UPDATE, INSERT, DELETE 
+ON telegram.* 
+TO '_tester';
+GRANT SELECT ON telegram.* TO '_manager';
+
+# забрать права у пользователей
+REVOKE ALL ON *.* 
+FROM 
+	`john_admin`@`localhost`, 
+	`alex_dev`@`localhost`, 
+	`max_tester`@`localhost`, 
+	`paul_manager`@`localhost`;
+
+# проверить права пользователей
+SHOW GRANTS FOR `john_admin`@`localhost`;
+SHOW GRANTS FOR `alex_dev`@`localhost`;
+
+# присвоить группы пользователям
+GRANT '_admin' TO `john_admin`@`localhost`;
+GRANT '_developer' TO `alex_dev`@`localhost`;
+GRANT '_tester' TO `max_tester`@`localhost`;
+GRANT '_manager' TO `paul_manager`@`localhost`;
+
+# проверить роль текущего пользователя
+SELECT CURRENT_ROLE();
+
+# установить роли по умолчанию (чтобы роль применялась автоматически для пользователей)
+SET DEFAULT ROLE ALL TO
+	`john_admin`@`localhost`, 
+	`alex_dev`@`localhost`, 
+	`max_tester`@`localhost`, 
+	`paul_manager`@`localhost`;
+
+# забрать роль у пользователя
+REVOKE '_manager' FROM `paul_manager`@`localhost`;
+
+# создать нового менеджера
+CREATE USER 'anna_manager'@'localhost' IDENTIFIED BY '12345'
+PASSWORD EXPIRE INTERVAL 180 DAY
+FAILED_LOGIN_ATTEMPTS 3 
+PASSWORD_LOCK_TIME 2;
+
+# присвоить группу новому пользователю
+GRANT '_manager' TO `anna_manager`@`localhost`;
+# установить роль по умолчанию для него
+SET DEFAULT ROLE ALL TO `anna_manager`@`localhost`;
+
+# удалить роль
+DROP ROLE '_manager';
+
+
+
+																		#Вопросы оптимизации(лишний join)
+# задать используемую БД
+USE telegram;
+
+# изначальный запрос с объединением
+SELECT 
+    firstname,
+    lastname,
+    email,
+    status_text
+FROM telegram.users u
+JOIN telegram.user_settings us ON u.id = us.user_id 
+WHERE id = 1;
+
+# добавление нового поля в таблицу users
+ALTER TABLE users ADD COLUMN status_text VARCHAR(70);
+
+# копирование данных из таблицы user_settings в таблицу users (поле status_text)
+UPDATE users AS u 
+JOIN user_settings AS us ON u.id = us.user_id
+SET u.status_text = us.status_text ;
+
+# удаление поля в таблице user_settings 
+ALTER TABLE user_settings DROP COLUMN status_text;
+
+# обновленный (более оптимальный, без JOIN) запрос, выводящий те же данные, что и изначальный запрос
+SELECT 
+    firstname,
+    lastname,
+    email,
+    status_text
+FROM telegram.users u
+# JOIN telegram.user_settings us ON u.id = us.user_id 
+WHERE id = 1;
+
+
+
+																			#денормализация
+# изначальный простой SELECT запрос
+SELECT *
+FROM stories 
+WHERE user_id IN (1,2,3);
+
+# запрос с учетом количества лайков
+SELECT 
+    s.id,
+    COUNT(*)
+FROM stories s
+JOIN stories_likes sl ON s.id = sl.story_id 
+WHERE s.user_id IN (1,2,3)
+GROUP BY s.id;
+
+# добавление нового поля для подсчета лайков (собственно, денормализация)
+ALTER TABLE stories ADD COLUMN likes_count bigint UNSIGNED DEFAULT 0;
+
+# упрощение финального запроса (достаточно обратиться к 1 таблице)
+SELECT 
+    s.id,
+    likes_count,
+    s.*
+FROM stories s
+# JOIN stories_likes sl ON s.id = sl.story_id 
+WHERE s.user_id IN (1,2,3)
+# GROUP BY s.id;
