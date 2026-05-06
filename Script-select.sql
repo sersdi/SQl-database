@@ -1257,3 +1257,145 @@ WHERE id = 1;
 # добавление индекса на поле title
 ALTER TABLE channels ADD INDEX (title);
 
+																	#Анализ запросов 
+# удаляем внешний ключ из таблицы stories_likes
+ALTER TABLE telegram.stories_likes DROP FOREIGN KEY stories_likes_ibfk_2;
+
+# удаляем индекс из таблицы stories_likes (на том же поле)
+ALTER TABLE telegram.stories_likes DROP INDEX story_id;
+
+# количество строк в таблице stories_likes
+SELECT count(*) FROM stories_likes;
+
+# проблемный (медленный запрос)
+ EXPLAIN SELECT 
+    s.id,
+    COUNT(*) AS cnt,
+    u.firstname,
+    u.lastname,
+    (SELECT app_language from user_settings us WHERE u.id = us.user_id) AS app_language
+FROM users u
+JOIN stories s ON u.id = s.user_id 
+JOIN stories_likes sl ON s.id = sl.story_id 
+GROUP BY s.id
+ORDER BY cnt DESC 
+LIMIT 20;
+
+
+									# использование команды EXPLAIN (применима ко всем командам из набора CRUD)
+EXPLAIN SELECT 
+	s.id,
+	COUNT(*) AS cnt,
+	u.firstname,
+	u.lastname,
+	(SELECT app_language from user_settings us WHERE u.id = us.user_id) AS app_language
+FROM users u
+JOIN stories s ON u.id = s.user_id 
+JOIN stories_likes sl ON s.id = sl.story_id 
+GROUP BY s.id
+ORDER BY cnt DESC 
+LIMIT 20;
+
+# пример быстро исполняющегося запроса
+# вывод данных о пользователе
+SELECT 
+	firstname,
+	lastname,
+	app_language,
+	is_premium_account AS 'is_premium',
+	created_at 
+FROM users AS u
+JOIN user_settings AS us ON us.user_id = u.id
+WHERE id = 1;
+
+
+
+													# анализ запроса до исправления ошибок
+EXPLAIN SELECT 
+    s.id,
+    COUNT(*) AS cnt,
+    u.firstname,
+    u.lastname,
+    (SELECT app_language from user_settings us WHERE u.id = us.user_id) AS app_language
+FROM users u
+JOIN stories s ON u.id = s.user_id 
+JOIN stories_likes sl ON s.id = sl.story_id 
+GROUP BY s.id
+ORDER BY cnt DESC 
+LIMIT 20;
+
+# возвращаем индекс
+ALTER TABLE stories_likes ADD INDEX (story_id);
+
+# возвращаем внешний ключ
+ALTER TABLE stories_likes ADD FOREIGN KEY (story_id) REFERENCES stories(id);
+
+# анализ запроса после исправления ошибок
+EXPLAIN SELECT 
+    s.id,
+    COUNT(*) AS cnt,
+    u.firstname,
+    u.lastname,
+    (SELECT app_language from user_settings us WHERE u.id = us.user_id) AS app_language
+FROM users u
+JOIN stories s ON u.id = s.user_id 
+JOIN stories_likes sl ON s.id = sl.story_id 
+GROUP BY s.id
+ORDER BY cnt DESC 
+LIMIT 20;
+
+
+											#Графический план показательные примеры
+# фильтрация по непроиндексированному полю
+SELECT * FROM users 
+WHERE login = 'any string...'; 
+
+# фильтрация с оператором LIKE
+SELECT * FROM users 
+WHERE login LIKE 'any string...'; 
+
+# индексация поля login
+ALTER TABLE users ADD INDEX (login);
+
+# повторные запросы после добавления индекса
+SELECT * FROM users 
+WHERE login = 'any string...'; 
+# 
+SELECT * FROM users 
+WHERE login like 'any string...'; 
+
+# оператор LIKE не может использовать индексы
+SELECT * FROM users 
+WHERE login LIKE '%any string...'; 
+
+SELECT * FROM users 
+WHERE login LIKE '_any string...'; 
+
+# поиск по идентификатору (первичному ключу) - самый эффективные способ получения данных
+SELECT * FROM users 
+WHERE id = 1; 
+
+
+# вывод данных о пользователе
+-- скоррелированный вложенный вариант запроса
+SELECT 
+    firstname,
+    lastname,
+    (SELECT app_language FROM user_settings WHERE user_id = users.id) AS 'app_language',
+    (SELECT is_premium_account FROM user_settings WHERE user_id = users.id) AS 'is_premium',
+#    (SELECT status_text FROM user_settings WHERE user_id = users.id) AS 'status_text',
+    (SELECT created_at FROM user_settings WHERE user_id = users.id) AS 'created_at'
+FROM users
+WHERE id = 1;
+
+-- вариант с использованием INNER JOIN
+SELECT 
+    firstname,
+    lastname,
+    app_language,
+    is_premium_account AS 'is_premium',
+#    status_text,
+    created_at
+FROM users AS u
+JOIN user_settings AS us ON us.user_id = u.id
+WHERE id = 1;
