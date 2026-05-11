@@ -1399,3 +1399,83 @@ SELECT
 FROM users AS u
 JOIN user_settings AS us ON us.user_id = u.id
 WHERE id = 1;
+
+
+													#Работа с логами 
+
+# вывести глобальные переменные, в названии которых есть слово 'log'
+SHOW GLOBAL variables LIKE '%log%';
+
+# меняем/устанавливаем файл с общими логами
+SET GLOBAL general_log = 'OFF';
+SET GLOBAL general_log_file = 'mysql_general.log';
+SET GLOBAL general_log = 'ON';
+
+# соответствующие настройки в файле конфигов
+[mysqld]
+general_log_file = mysql_general.log
+general_log = 1
+
+# меняем/устанавливаем файл с логами медленных запросов
+SET GLOBAL slow_query_log = 'OFF';
+SET GLOBAL long_query_time = 0.3;
+SET GLOBAL slow_query_log_file = 'mysql_slow_queries.log';
+SET GLOBAL slow_query_log = 'ON';
+
+# соответствующие настройки в файле конфигов
+[mysqld]
+long_query_time = 0.3
+slow_query_log_file = mysql_slow_queries.log
+slow_query_log = 1
+
+										# создание процедуры с простым примером цикла REPEAT
+DROP PROCEDURE IF EXISTS telegram.repeat_loop_sample;
+
+DELIMITER $$
+$$
+CREATE DEFINER=`root`@`localhost` PROCEDURE `telegram`.`repeat_loop_sample`(start_number INT)
+BEGIN
+  DECLARE current_number INT;
+  DECLARE _result VARCHAR(255);
+  SET current_number = start_number;
+  SET _result = '';
+
+  REPEAT
+    SET _result = CONCAT(_result, current_number, ', ');
+    SET current_number = current_number - 1;
+    UNTIL current_number <= 0
+  END REPEAT;
+
+  SELECT _result;    
+END $$
+DELIMITER ;
+
+
+-- вызов процедуры с циклом
+CALL repeat_loop_sample(10); 
+
+# создание процедуры с простым примером цикла WHILE
+DROP PROCEDURE IF EXISTS telegram.while_loop_sample;
+
+DELIMITER $$
+$$
+CREATE DEFINER=`root`@`localhost` PROCEDURE `telegram`.`while_loop_sample`(start_number INT)
+BEGIN
+  DECLARE current_number INT;
+  DECLARE _result VARCHAR(255);
+  SET current_number = start_number;
+  SET _result = '';
+
+  WHILE current_number > 0 DO
+    SET _result = CONCAT(_result, current_number, ', ');
+    SET current_number = current_number - 1;
+  END WHILE;
+
+  SELECT _result;        
+END $$
+DELIMITER ;
+
+
+-- вызов процедуры с циклом
+CALL while_loop_sample(10);
+
